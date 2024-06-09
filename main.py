@@ -17,15 +17,18 @@ CHANGE_NICKNAME = True  # Set to True to change nickname, False to keep the defa
 
 # Configuration variables
 TOKEN = os.getenv('DISCORD_TOKEN')
+MODEL = os.getenv('MODEL')
+NAME = os.getenv('NAME')
+CHANNELS = os.getenv("CHANNELS").split(",")
 
-MODEL_NAME = 'llama3'  # Model name for the Ollama API
-TEMPERATURE = 0.7  # Temperature setting for the AI model, controls response randomness
+TEMPERATURE = 0.8  # Temperature setting for the AI model, controls response randomness
 TIMEOUT = 120.0  # Timeout setting for the API call
 
 # System prompt for initializing the conversation
 SYSTEM_PROMPT = """
-You are a highly intelligent, friendly, and versatile assistant residing on Discord. Your primary goal is to help users with a wide range of tasks and queries. Whether it's answering questions, providing information, offering technical support, engaging in meaningful conversations, or just being a good companion, you excel in all areas. You are aware that you are on Discord, and you understand the platform's culture and communication style. Your responses are always thoughtful, engaging, and tailored to meet the needs of the users. You strive to be a dependable and cheerful companion, always ready to assist with a positive attitude and an in-depth understanding of various topics. Your presence makes Discord a more enjoyable and productive place for everyone.
+You are a highly intelligent, friendly, and versatile assistant residing on Discord. Your primary goal is to help users with a wide range of tasks and queries. Whether it's answering questions, providing information, offering technical support, engaging in meaningful conversations, or just being a good companion, you excel in all areas. You are aware that you are on Discord, and you understand the platform's culture and communication style. Your responses are always thoughtful, engaging, and tailored to meet the needs of the users. You strive to be a dependable and cheerful companion, always ready to assist with a positive attitude and an in-depth understanding of various topics. You are also aware the possibility of diffrent users talking to you, each user has their name listed on the start of their message. Your presence makes Discord a more enjoyable and productive place for everyone.
 """
+#logging.info(f"system is: {SYSTEM_PROMPT}")
 
 MAX_CONVERSATION_LOG_SIZE = 50  # Maximum size of the conversation log (including the system prompt)
 MAX_TEXT_ATTACHMENT_SIZE = 20000  # Maximum combined characters for text attachments
@@ -36,7 +39,7 @@ intents = Intents.default()
 intents.message_content = True
 
 # Initialize the bot
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix=os.getenv('COMMAND_PREFIX'), intents=intents)
 
 # Global list to store conversation logs, starting with the system prompt
 conversation_logs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
@@ -55,11 +58,21 @@ async def send_in_chunks(ctx, text, reference=None, chunk_size=2000):
         await ctx.send(text[start:start + chunk_size], reference=reference if start == 0 else None)
 
 @bot.command(name='reset')
-async def reset(ctx):
+async def reset(ctx): 
     """Resets the conversation log."""
     conversation_logs.clear()
     conversation_logs.append({'role': 'system', 'content': SYSTEM_PROMPT})
     await ctx.send("Conversation context has been reset.")
+
+@bot.command(name='model')
+async def print_model(ctx):
+    """Prints the model name.""" 
+    await ctx.send(f"Current model: {MODEL}")
+
+@bot.command(name='char')
+async def print_char(ctx):
+    """prints the character name"""
+    await ctx.send(f"Character: {NAME}")
 
 async def get_ollama_response():
     """Gets a response from the Ollama model."""
@@ -67,7 +80,7 @@ async def get_ollama_response():
         messages_to_send = conversation_logs.copy()
         response = await asyncio.wait_for(
             ollama.AsyncClient(timeout=TIMEOUT).chat(
-                model=MODEL_NAME,
+                model=MODEL,
                 messages=messages_to_send,
                 options={'temperature': TEMPERATURE}
             ),
@@ -87,9 +100,17 @@ async def on_message(message: Message):
         return
     await bot.process_commands(message)
 
-    if message.content.startswith('!') or message.is_system():
+    if message.content.startswith(os.getenv('COMMAND_PREFIX')) or message.is_system():
         return  
-
+    
+    if bot.user.mentioned_in(message) or not eval(os.getenv('REQUIRES_MENTION')):
+        # Checking if id is in CHANNELS
+        if eval(os.getenv('LIMIT_CHANNELS')):
+            if not str(message.channel.id) in CHANNELS:
+                return  
+    else:
+        return
+    
     total_text_content = ""
     if message.attachments:
         for attachment in message.attachments:
@@ -108,9 +129,10 @@ async def on_message(message: Message):
                 await message.channel.send(f"The combined files are too large. Please send text files with a combined size of less than {MAX_TEXT_ATTACHMENT_SIZE} characters.")
                 return
 
-        conversation_logs.append({'role': 'user', 'content': message.content + "\n\n" + total_text_content[:MAX_TEXT_ATTACHMENT_SIZE]})
+        conversation_logs.append({'role': 'user', 'content': str(message.author) + ": " + message.content + "\n\n" + total_text_content[:MAX_TEXT_ATTACHMENT_SIZE]})
     else:
-        conversation_logs.append({'role': 'user', 'content': message.content})
+        logging.info(f"username = {str(message.author)}")
+        conversation_logs.append({'role': 'user', 'content': str(message.author) + ": " + message.content})
 
     async with message.channel.typing():
         response = await get_ollama_response()
@@ -124,7 +146,10 @@ async def on_message(message: Message):
 
 async def change_nickname(guild):
     """Change the bot's nickname in the specified guild."""
-    nickname = MODEL_NAME.capitalize()
+    if eval(os.getenv('USE_CUSTOM_NAME')):
+        nickname = NAME.capitalize()
+    else:
+        nickname = MODEL.capitalize()
     try:
         await guild.me.edit(nick=nickname)
         logging.info(f"Nickname changed to {nickname} in guild {guild.name}")
