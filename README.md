@@ -115,8 +115,19 @@ You can reset the conversation log by using the `!reset` command in Discord.
 [![Watch the video](https://img.youtube.com/vi/S7Dztn9qPSw/0.jpg)](https://youtu.be/S7Dztn9qPSw)
 
 ### Ag101 Fork info
+-initial fork
 unhardcoded some stuff, made more customizable
 added checking for mentions
 added channel limiting
 added additional commands
 added ability for bot to see the username (hardcoded)
+
+-6/19/2024 update
+updated message formatting to include username, displayname, channel and time
+added fun settings:
+ LOG_ALL_MESSAGES (only when bot is active)
+ RANDOM_RESPOND
+added save and backup system
+ AUTOMATIC_SAVE
+ save command
+ (to restore backup: change its name to save.json and put it in place of the old save.json)

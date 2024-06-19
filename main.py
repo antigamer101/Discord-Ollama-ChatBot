@@ -5,6 +5,9 @@ from discord import Intents, Message
 from discord.ext import commands
 import ollama
 import logging
+import json
+import shutil
+import random
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,17 +23,21 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 MODEL = os.getenv('MODEL')
 NAME = os.getenv('NAME')
 CHANNELS = os.getenv("CHANNELS").split(",")
+LOG_ALL_MESSAGES = os.getenv("LOG_ALL_MESSAGES")
+RANDOMRESPOND = os.getenv("RANDOMRESPOND")
 
 TEMPERATURE = 0.8  # Temperature setting for the AI model, controls response randomness
 TIMEOUT = 120.0  # Timeout setting for the API call
 
 # System prompt for initializing the conversation
-SYSTEM_PROMPT = """
-You are a highly intelligent, friendly, and versatile assistant residing on Discord. Your primary goal is to help users with a wide range of tasks and queries. Whether it's answering questions, providing information, offering technical support, engaging in meaningful conversations, or just being a good companion, you excel in all areas. You are aware that you are on Discord, and you understand the platform's culture and communication style. Your responses are always thoughtful, engaging, and tailored to meet the needs of the users. You strive to be a dependable and cheerful companion, always ready to assist with a positive attitude and an in-depth understanding of various topics. You are also aware the possibility of diffrent users talking to you, each user has their name listed on the start of their message. Your presence makes Discord a more enjoyable and productive place for everyone.
+SYSTEM_PROMPT = f"""
+{os.getenv("SYSTEM_PROMPT")}
 """
-#logging.info(f"system is: {SYSTEM_PROMPT}")
+save_file_path = "save.json"
+backup_folder = "backups"
 
-MAX_CONVERSATION_LOG_SIZE = 50  # Maximum size of the conversation log (including the system prompt)
+
+MAX_CONVERSATION_LOG_SIZE = 55  # Maximum size of the conversation log (including the system prompt)
 MAX_TEXT_ATTACHMENT_SIZE = 20000  # Maximum combined characters for text attachments
 MAX_FILE_SIZE = 2 * 1024 * 1024  # Maximum file size in bytes (2 MB)
 
@@ -42,7 +49,31 @@ intents.message_content = True
 bot = commands.Bot(command_prefix=os.getenv('COMMAND_PREFIX'), intents=intents)
 
 # Global list to store conversation logs, starting with the system prompt
-conversation_logs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+
+try:
+   with open(save_file_path, 'r') as file:
+       conversation_logs = json.load(file)
+       logging.info("memmory loaded")
+       conversation_logs[0] = {'role': 'system', 'content': SYSTEM_PROMPT}
+except Exception as e:
+   logging.warn(f"Failed to load state from {save_file_path}: {e}")
+   conversation_logs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+
+def reload_memory():
+    try:
+        with open(save_file_path, 'r') as file:
+            conversation_logs = json.load(file)
+            logging.info("memmory loaded")
+            conversation_logs[0] = {'role': 'system', 'content': SYSTEM_PROMPT}
+            return conversation_logs
+    except Exception as e:
+        logging.warn(f"Failed to load state from {save_file_path}: {e}")
+        conversation_logs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        return conversation_logs
+
+#########################################################################################################
+
+
 
 def is_text_file(file_content):
     """Determine if the file content can be read as text."""
@@ -59,10 +90,32 @@ async def send_in_chunks(ctx, text, reference=None, chunk_size=2000):
 
 @bot.command(name='reset')
 async def reset(ctx): 
-    """Resets the conversation log."""
-    conversation_logs.clear()
-    conversation_logs.append({'role': 'system', 'content': SYSTEM_PROMPT})
-    await ctx.send("Conversation context has been reset.")
+    """reset's bot memory and creates a backup for it"""
+
+    # Create the backup folder if it doesn't exist
+    if not os.path.exists(backup_folder):
+        os.makedirs(backup_folder)
+
+    # Check if the file exists
+    if os.path.exists(save_file_path):
+        # Rename existing backups
+        for i in range(100, 0, -1):
+            backup_file = os.path.join(backup_folder, f'backup{i}.json')
+            if os.path.exists(backup_file):
+                new_backup_file = os.path.join(backup_folder, f'backup{i+1}.json')
+                os.rename(backup_file, new_backup_file)
+
+        # Create a new backup
+        shutil.copy(save_file_path, os.path.join(backup_folder, 'backup1.json'))
+
+        # Delete the original file
+        os.remove(save_file_path)
+        conversation_logs.clear()
+        conversation_logs.append({'role': 'system', 'content': SYSTEM_PROMPT})
+        await ctx.send("Conversation context has been reset.")
+    else:
+        await ctx.send(f'The file {save_file_path} does not exist.')
+
 
 @bot.command(name='model')
 async def print_model(ctx):
@@ -73,6 +126,20 @@ async def print_model(ctx):
 async def print_char(ctx):
     """prints the character name"""
     await ctx.send(f"Character: {NAME}")
+
+@bot.command(name='save')
+async def save(ctx):
+    """Saves chat / Manual save"""
+    await ctx.send(f"Saving")
+    with open(save_file_path, 'w') as file:
+        json.dump(conversation_logs, file)
+        
+
+@bot.command(name='logs')
+async def print_model(ctx):
+    """Prints model conversation_logs (FOR DEBUGGING)""" 
+    logging.info(conversation_logs)
+    await ctx.send(conversation_logs)
 
 async def get_ollama_response():
     """Gets a response from the Ollama model."""
@@ -93,6 +160,11 @@ async def get_ollama_response():
         logging.error(f"An error occurred: {e}")
         return f"An error occurred: {e}"
 
+@bot.command(name='system')
+async def print_char(ctx):
+    """Prints the system prompt"""
+    await ctx.send(f"SYSTEM :\n {SYSTEM_PROMPT}")
+
 @bot.event
 async def on_message(message: Message):
     """Handles incoming messages."""
@@ -103,12 +175,14 @@ async def on_message(message: Message):
     if message.content.startswith(os.getenv('COMMAND_PREFIX')) or message.is_system():
         return  
     
-    if bot.user.mentioned_in(message) or not eval(os.getenv('REQUIRES_MENTION')):
+    if bot.user.mentioned_in(message) or not eval(os.getenv('REQUIRES_MENTION')) or (random.randint(0,100) >= 100-int(os.getenv('RANDOM_RESPOND_PERCENTAGE')) and eval(os.getenv('RANDOM_RESPOND'))):
         # Checking if id is in CHANNELS
         if eval(os.getenv('LIMIT_CHANNELS')):
             if not str(message.channel.id) in CHANNELS:
                 return  
     else:
+        if eval(LOG_ALL_MESSAGES):
+            conversation_logs.append({'role': 'user', 'content': f"Display Name (Username) in Channel - Timestamp\n{str(message.author.display_name)} ({str(message.author)}) in {str(message.channel.name)} - {str(message.created_at)} \n{message.content}"})
         return
     
     total_text_content = ""
@@ -129,18 +203,22 @@ async def on_message(message: Message):
                 await message.channel.send(f"The combined files are too large. Please send text files with a combined size of less than {MAX_TEXT_ATTACHMENT_SIZE} characters.")
                 return
 
-        conversation_logs.append({'role': 'user', 'content': str(message.author) + ": " + message.content + "\n\n" + total_text_content[:MAX_TEXT_ATTACHMENT_SIZE]})
+        conversation_logs.append({'role': 'user', 'content': f"Display Name (Username) in Channel - Timestamp\n{str(message.author.display_name)} ({str(message.author)}) in {str(message.channel.name)} - {str(message.created_at)} \n{message.content}\n\n{total_text_content[:MAX_TEXT_ATTACHMENT_SIZE]}"})
     else:
         logging.info(f"username = {str(message.author)}")
-        conversation_logs.append({'role': 'user', 'content': str(message.author) + ": " + message.content})
+        conversation_logs.append({'role': 'user', 'content': f"Display Name (Username) in Channel - Timestamp\n{str(message.author.display_name)} ({str(message.author)}) in {str(message.channel.name)} - {str(message.created_at)} \n{message.content}"})
 
     async with message.channel.typing():
         response = await get_ollama_response()
 
     conversation_logs.append({'role': 'assistant', 'content': response})
+    if eval(os.getenv('AUTOMATIC_SAVE')):
+        with open(save_file_path, 'w') as file:
+            json.dump(conversation_logs, file)
 
     while len(conversation_logs) > MAX_CONVERSATION_LOG_SIZE:
         conversation_logs.pop(1)  # Remove the oldest message after the system prompt
+
 
     await send_in_chunks(message.channel, response, message)
 
